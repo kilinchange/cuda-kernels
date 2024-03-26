@@ -17,7 +17,8 @@ Reduction3_kernel(int* out, const int* in, size_t N) {
    sPartials[tid] = sum;
    __syncthreads();
 
-   if (numThreads > 1024) {
+   if (numThreads >= 1024)
+   {
       if (tid < 512) {
          sPartials[tid] += sPartials[tid + 512];
       }
