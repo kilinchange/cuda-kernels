@@ -1,9 +1,9 @@
 #include <cuda_runtime.h>
 #include <stdio.h>
 
-// 以循环展开的线程束同步作为结束的归约
+// 任意线程块大小的归约
 __global__ void
-Reduction2_kernel(int* out, const int* in, size_t N) {
+Reduction6_kernel(int* out, const int* in, size_t N) {
    extern __shared__ int sPartials[];
    int sum = 0;
    const int tid = threadIdx.x;
@@ -15,37 +15,41 @@ Reduction2_kernel(int* out, const int* in, size_t N) {
    sPartials[tid] = sum;
    __syncthreads();
 
-   // 利用线程束同步代码，减少了对数步长归约过程中的条件代码数量
-   for (int activeThreads = blockDim.x >> 1;
-        activeThreads > 32;
+   // Start the shared memory loop on the next power of 2 less
+   // than the block size. If block size is not a power of 2,
+   // accumulate the intermediate sums in the remainder range.
+   int floorPow2 = blockDim.x;
+
+   if (floorPow2 & (floorPow2 - 1)) {
+      // 循环的作用是计算不大于 blockDim.x 的 2 的幂次
+      while (floorPow2 & (floorPow2 - 1)) {
+         floorPow2 &= floorPow2 - 1;
+      }
+      // 将超过 2 的幂次的线程计算得到的值累加到前面的线程里，以便后续进行对数归约
+      if (tid >= floorPow2) {
+         sPartials[tid - floorPow2] += sPartials[tid];
+      }
+      __syncthreads();
+   }
+
+   for (int activeThreads = floorPow2 >> 1;
+        activeThreads;
         activeThreads >>= 1) {
       if (tid < activeThreads) {
          sPartials[tid] += sPartials[tid + activeThreads];
       }
       __syncthreads();
    }
-   // 线程块的活动线程数低于 warp_size(32)，无需调用 __syncthreads() 函数，因为 warp 是按照锁步方式执行每条指令(SIMD)
-   if (threadIdx.x < 32) {
-      volatile int* wsSum = sPartials;
-      if (blockDim.x > 32) {
-         wsSum[tid] += wsSum[tid + 32];
-      }
-      wsSum[tid] += wsSum[tid + 16];
-      wsSum[tid] += wsSum[tid + 8];
-      wsSum[tid] += wsSum[tid + 4];
-      wsSum[tid] += wsSum[tid + 2];
-      wsSum[tid] += wsSum[tid + 1];
-      if (tid == 0) {
-         volatile int* wsSum = sPartials;
-         out[blockIdx.x] = wsSum[0];
-      }
+
+   if (tid == 0) {
+      out[blockIdx.x] = sPartials[0];
    }
 }
 
-void Reduction2(int* answer, int* partial, const int* in, size_t N, int numBlocks, int numThreads) {
+void Reduction6(int* answer, int* partial, const int* in, size_t N, int numBlocks, int numThreads) {
    unsigned int sharedSize = numThreads * sizeof(int);
-   Reduction2_kernel<<<numBlocks, numThreads, sharedSize>>>(partial, in, N);
-   Reduction2_kernel<<<1, numThreads, sharedSize>>>(answer, partial, numBlocks);
+   Reduction6_kernel<<<numBlocks, numThreads, sharedSize>>>(partial, in, N);
+   Reduction6_kernel<<<1, numThreads, sharedSize>>>(answer, partial, numBlocks);
 }
 
 int main() {
@@ -66,7 +70,7 @@ int main() {
    cudaMemcpy(in, h_in, N * sizeof(int), cudaMemcpyHostToDevice);
 
    // invoke the kernel
-   Reduction2(answer, partial, in, N, numBlocks, numThreads);
+   Reduction6(answer, partial, in, N, numBlocks, numThreads);
 
    // transfer output from device to host
    int h_answer[1];

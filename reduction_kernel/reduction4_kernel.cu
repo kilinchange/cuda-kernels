@@ -1,6 +1,7 @@
 #include <cuda_runtime.h>
 #include <stdio.h>
 
+// 单遍归约内核
 template <unsigned int numThreads>
 __device__ void
 Reduction4_LogStepShared(int *out, volatile int *partials)
@@ -96,6 +97,7 @@ reduceSinglePass(int *out, int *partial,
     if (gridDim.x == 1)
     {
         Reduction4_LogStepShared<numThreads>(&out[blockIdx.x], sPartials);
+        return;
     }
     Reduction4_LogStepShared<numThreads>(&partial[blockIdx.x], sPartials);
     __shared__ bool lastBlock;
@@ -134,9 +136,9 @@ reduceSinglePass(int *out, int *partial,
 template <unsigned int numThreads>
 void Reduction4_template(int *answer, int *partial, const int *in, size_t N, int numBlocks)
 {
-    reduceSinglePass<numThreads><<<
-        1, numThreads, numThreads * sizeof(int)>>>(
-        answer, partial, in, numBlocks);
+   reduceSinglePass<numThreads><<<
+       numBlocks, numThreads, numThreads * sizeof(int)>>>(
+       answer, partial, in, N);
 }
 
 void Reduction4(int *out, int *partial, const int *in, size_t N, int numBlocks, int numThreads)
@@ -172,18 +174,22 @@ int main()
 {
     // malloc host memory
     int h_in[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    size_t N = 8;
+    size_t partialN = N;
+    int numBlocks = 2;
+    int numThreads = 4;
 
     // malloc device memory
     int *answer, *partial, *in;
     cudaMalloc((void **)&answer, 1 * sizeof(int));
-    cudaMalloc((void **)&partial, 2 * sizeof(int));
-    cudaMalloc((void **)&in, 8 * sizeof(int));
+    cudaMalloc((void**)&partial, partialN * sizeof(int));
+    cudaMalloc((void**)&in, N * sizeof(int));
 
     // transfer data from host to device
-    cudaMemcpy(in, h_in, 8 * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(in, h_in, N * sizeof(int), cudaMemcpyHostToDevice);
 
     // invoke the kernel
-    Reduction4(answer, partial, in, 8, 2, 4);
+    Reduction4(answer, partial, in, N, numBlocks, numThreads);
 
     // transfer output from device to host
     int h_answer[1];

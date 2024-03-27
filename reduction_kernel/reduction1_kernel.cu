@@ -40,18 +40,22 @@ void Reduction1(int* answer, int* partial, const int* in, size_t N, int numBlock
 int main() {
    // malloc host memory
    int h_in[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+   size_t N = 8;
+   size_t partialN = N;
+   int numBlocks = 2;
+   int numThreads = 4;
 
    // malloc device memory
    int *answer, *partial, *in;
    cudaMalloc((void**)&answer, 1 * sizeof(int));
-   cudaMalloc((void**)&partial, 2 * sizeof(int));
-   cudaMalloc((void**)&in, 8 * sizeof(int));
+   cudaMalloc((void**)&partial, partialN * sizeof(int));
+   cudaMalloc((void**)&in, N * sizeof(int));
 
    // transfer data from host to device
-   cudaMemcpy(in, h_in, 8 * sizeof(int), cudaMemcpyHostToDevice);
+   cudaMemcpy(in, h_in, N * sizeof(int), cudaMemcpyHostToDevice);
 
    // invoke the kernel
-   Reduction1(answer, partial, in, 8, 2, 4);
+   Reduction1(answer, partial, in, N, numBlocks, numThreads);
 
    // transfer output from device to host
    int h_answer[1];

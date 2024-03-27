@@ -1,9 +1,10 @@
 #include <cuda_runtime.h>
 #include <stdio.h>
+#include <cinttypes>
 
-// 以循环展开的线程束同步作为结束的归约
+// 基于洗牌指令的归约(__shfl_xor)
 __global__ void
-Reduction2_kernel(int* out, const int* in, size_t N) {
+Reduction8_kernel(int* out, const int* in, size_t N) {
    extern __shared__ int sPartials[];
    int sum = 0;
    const int tid = threadIdx.x;
@@ -30,22 +31,23 @@ Reduction2_kernel(int* out, const int* in, size_t N) {
       if (blockDim.x > 32) {
          wsSum[tid] += wsSum[tid + 32];
       }
-      wsSum[tid] += wsSum[tid + 16];
-      wsSum[tid] += wsSum[tid + 8];
-      wsSum[tid] += wsSum[tid + 4];
-      wsSum[tid] += wsSum[tid + 2];
-      wsSum[tid] += wsSum[tid + 1];
+      int mySum = wsSum[tid];
+      mySum += __shfl_xor_sync(uint32_t(-1), mySum, 16);
+      mySum += __shfl_xor_sync(uint32_t(-1), mySum, 8);
+      mySum += __shfl_xor_sync(uint32_t(-1), mySum, 4);
+      mySum += __shfl_xor_sync(uint32_t(-1), mySum, 2);
+      mySum += __shfl_xor_sync(uint32_t(-1), mySum, 1);
+
       if (tid == 0) {
-         volatile int* wsSum = sPartials;
-         out[blockIdx.x] = wsSum[0];
+         out[blockIdx.x] = mySum;
       }
    }
 }
 
-void Reduction2(int* answer, int* partial, const int* in, size_t N, int numBlocks, int numThreads) {
+void Reduction8(int* answer, int* partial, const int* in, size_t N, int numBlocks, int numThreads) {
    unsigned int sharedSize = numThreads * sizeof(int);
-   Reduction2_kernel<<<numBlocks, numThreads, sharedSize>>>(partial, in, N);
-   Reduction2_kernel<<<1, numThreads, sharedSize>>>(answer, partial, numBlocks);
+   Reduction8_kernel<<<numBlocks, numThreads, sharedSize>>>(partial, in, N);
+   Reduction8_kernel<<<1, numThreads, sharedSize>>>(answer, partial, numBlocks);
 }
 
 int main() {
@@ -66,7 +68,7 @@ int main() {
    cudaMemcpy(in, h_in, N * sizeof(int), cudaMemcpyHostToDevice);
 
    // invoke the kernel
-   Reduction2(answer, partial, in, N, numBlocks, numThreads);
+   Reduction8(answer, partial, in, N, numBlocks, numThreads);
 
    // transfer output from device to host
    int h_answer[1];
