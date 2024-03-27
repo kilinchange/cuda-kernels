@@ -1,5 +1,7 @@
 #include <cuda_runtime.h>
-#include <stdio.h>
+#include <cstdio>
+#include <cstdlib>
+#include <algorithm>
 
 // 两遍规约内核
 __global__ void Reduction1_kernel(int* out, const int* in, size_t N) {
@@ -39,8 +41,11 @@ void Reduction1(int* answer, int* partial, const int* in, size_t N, int numBlock
 
 int main() {
    // malloc host memory
-   int h_in[8] = {1, 2, 3, 4, 5, 6, 7, 8};
-   size_t N = 8;
+   size_t N = 1024;
+   int *h_in = reinterpret_cast<int *>(std::malloc(N * sizeof(int)));
+   std::generate(h_in, h_in + N, [n = 0] mutable
+                 { return ++n; });
+
    size_t partialN = N;
    int numBlocks = 2;
    int numThreads = 4;
@@ -55,7 +60,10 @@ int main() {
    cudaMemcpy(in, h_in, N * sizeof(int), cudaMemcpyHostToDevice);
 
    // invoke the kernel
-   Reduction1(answer, partial, in, N, numBlocks, numThreads);
+   for (int i = 0; i < 1000; ++i)
+   {
+      Reduction1(answer, partial, in, N, numBlocks, numThreads);
+   }
 
    // transfer output from device to host
    int h_answer[1];
