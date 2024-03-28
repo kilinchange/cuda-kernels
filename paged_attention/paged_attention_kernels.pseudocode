@@ -102,8 +102,7 @@ __device__ void paged_attention_kernel(
        logits[i] = val;
        exp_sum += val;
     }
-    ...
-    exp_sum = block_sum<NUM_WARPS>(&red_smem[NUM_WARPS], exp_sum);
+    ... exp_sum = block_sum<NUM_WARPS>(&red_smem[NUM_WARPS], exp_sum);
     // 最后，通过规约的 qk_max 和 exp_sum，我们可以得到最终的归一化的 softmax 结果并存储在 logits 里。
     // 该 logits 变量将在后续的步骤中与 value 数据进行点乘。现在，它存储的是所有上下文 token 的归一化 softmax 结果。
     const float inv_sum = __fdividef(1.f, exp_sum + 1e-6f);
@@ -120,55 +119,49 @@ __device__ void paged_attention_kernel(
     // 在内层循环中，每个线程从 V_VEC_SIZE 个 tokens 里读取 V_VEC_SIZE 个元素到 v_vec 中，并与 logits_vec 执行点乘。
     // 注意，这里每个线程拿到的是 tokens 的不同索引处的元素，点乘结果被累加到 accs 中。(TODO:?)
     float accs[NUM_ROWS_PER_THREAD];
-    for ... { // Iteration over different blocks.
+    for
+       ... {  // Iteration over different blocks.
         logits_vec = ...
         for ... { // Iteration over different rows.
-            v_vec = ...
-            ...
-            accs[i] += dot(logits_vec, v_vec);
+           v_vec = ...... accs[i] += dot(logits_vec, v_vec);
         }
-    }
+       }
 
     // LV
     // 现在，我们需要在每个 warp 内对 accs 进行规约，让每个线程得到一个 block 中 token 指定位置的 accs 累计值。(TODO:?)
     for (int i = 0; i < NUM_ROWS_PER_THREAD; i++) {
-      float acc = accs[i];
-      for (int mask = NUM_V_VECS_PER_ROW / 2; mask >= 1; mask /= 2) {
-        acc += VLLM_SHFL_XOR_SYNC(acc, mask);
-      }
-      accs[i] = acc;
+       float acc = accs[i];
+       for (int mask = NUM_V_VECS_PER_ROW / 2; mask >= 1; mask /= 2) {
+          acc += VLLM_SHFL_XOR_SYNC(acc, mask);
+       }
+       accs[i] = acc;
     }
     // 接下来，我们对所有 warp 进行规约，让每个线程都获取所有上下文 token 的指定位置的 accs 累计值。(TODO:?)
     float* out_smem = reinterpret_cast<float*>(shared_mem);
     for (int i = NUM_WARPS; i > 1; i /= 2) {
-      // Upper warps write to shared memory.
-      ...
-        float* dst = &out_smem[(warp_idx - mid) * HEAD_SIZE];
-        for (int i = 0; i < NUM_ROWS_PER_THREAD; i++) {
-          ...
-          dst[row_idx] = accs[i];
-        }
+       // Upper warps write to shared memory.
+       ... float* dst = &out_smem[(warp_idx - mid) * HEAD_SIZE];
+       for (int i = 0; i < NUM_ROWS_PER_THREAD; i++) {
+          ... dst[row_idx] = accs[i];
+       }
 
-        // Lower warps update the output.
-          const float* src = &out_smem[warp_idx * HEAD_SIZE];
-        for (int i = 0; i < NUM_ROWS_PER_THREAD; i++) {
-                    ...
-          accs[i] += src[row_idx];
-        }
-            // Write out the accs.
+       // Lower warps update the output.
+       const float* src = &out_smem[warp_idx * HEAD_SIZE];
+       for (int i = 0; i < NUM_ROWS_PER_THREAD; i++) {
+          ... accs[i] += src[row_idx];
+       }
+       // Write out the accs.
     }
 
     // Output
     // 现在将所有计算结果从本地寄存器内存写入最终要输出的全局内存中。
     // 首先，定义 out_ptr 变量，指向指定序列和头的起始地址。
-    scalar_t* out_ptr = out + seq_idx * num_heads * max_num_partitions * HEAD_SIZE
-                    + head_idx * max_num_partitions * HEAD_SIZE
-                    + partition_idx * HEAD_SIZE;
+    scalar_t* out_ptr = out + seq_idx * num_heads * max_num_partitions * HEAD_SIZE + head_idx * max_num_partitions * HEAD_SIZE + partition_idx * HEAD_SIZE;
     // 接下来，不断遍历不同指定头部位置，并根据 out_ptr 写出相应的累计结果。(TODO:?)
     for (int i = 0; i < NUM_ROWS_PER_THREAD; i++) {
-      const int row_idx = lane / NUM_V_VECS_PER_ROW + i * NUM_ROWS_PER_ITER;
-      if (row_idx < HEAD_SIZE && lane % NUM_V_VECS_PER_ROW == 0) {
-        from_float(*(out_ptr + row_idx), accs[i]);
-      }
+       const int row_idx = lane / NUM_V_VECS_PER_ROW + i * NUM_ROWS_PER_ITER;
+       if (row_idx < HEAD_SIZE && lane % NUM_V_VECS_PER_ROW == 0) {
+          from_float(*(out_ptr + row_idx), accs[i]);
+       }
     }
 }
